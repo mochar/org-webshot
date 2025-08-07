@@ -15,9 +15,12 @@
 
 ;;; Code:
 
+;;;; Requirements
 (require 'transient)
 (require 'ediff)
+(require 'cl-lib)
 
+;;;; Customization
 (defgroup org-webshot nil
   "HTML to Org conversion interface."
   :group 'tools)
@@ -53,9 +56,45 @@ and (potentially nil) title of the document, and returns the path."
           (function :tag "Function returning path from URL and title"))
   :group 'org-webshot)
 
-;; Internal variables
+(defcustom org-webshot-defuddle-to-markdown t
+  "Defuddle output should be a Markdown file if non-nil, else an HTML file."
+  :type 'boolean
+  :group 'org-webshot)
+
+(defcustom org-webshot-media-path 'org-webshot--default-media-path
+  "Where to store the media files contained within the HTML document.
+
+Can be a string specifying the path to the directory, or a function that
+ takes in the path to the HTML file. If path is relative, then it is
+ relative to the directory where the org file will be stored."
+  :type '(choice
+          (string :tag "Media directory path")
+          (function :tag "Function returning path from HTML filename"))
+  :group 'org-webshot)
+
+(defcustom org-webshot-default-output-directory nil
+  "The default directory where the converted Org files will be stored."
+  :type '(choice
+          (directory :tag "Output directory")
+          (const nil))
+  :group 'org-webshot)
+
+(defcustom org-webshot-converters '()
+  "Alist mapping converter type symbols to metadata plists.
+
+See `org-webshot-converters-add' and `org-webshot-converters-remove'."
+  :type '(repeat (cons symbol plist))
+  :group 'org-webshot)
+
+;;;; Variables
+
 (defvar org-webshot--tmp-html-file-prefix "org-webshot_"
   "Prefix of the temporary file in which the HTML file is first stored.")
+
+(defvar org-webshot--tmp-intermediate-file-prefix "org-webshot-int_"
+  "Prefix of the intermediate file between the original HTML file and the final Org file.")
+
+;;;; Commands
 
 ;;;###autoload
 (defun org-webshot ()
@@ -63,8 +102,41 @@ and (potentially nil) title of the document, and returns the path."
   (interactive)
   (org-webshot--transient))
 
-(transient-define-prefix org-webshot--transient ()
-  "HTML to Org Converter Interface")
+(defun org-webshot-download-website (url)
+  "Download website as a single HTML file and store it in `org-webshot-html-path', which is returned."
+  (interactive "sURL: ")
+  (let* ((title (org-webshot--get-page-title url))
+         (path (org-webshot--html-path url title))
+         (status-code (org-webshot--call-monolith url path)))
+    (if (= 0 status-code)
+        path
+      (user-error "Error calling monolith." status-code))))
+
+;;;; Functions
+
+;;;;; Utilities
+
+(defun org-webshot--slugify-title (title)
+  "From TITLE, make a filename slug meant to look nice as URL component.
+
+This is a literal copy-paste from the function
+`org-node-slugify-for-web' of the `org-node' package. Hope that's ok..."
+  (thread-last title
+               (org-link-display-format)
+               (string-glyph-decompose)
+               (seq-remove (lambda (char) (<= #x300 char #x331)))
+               (concat)
+               (string-glyph-compose)
+               (downcase)
+               (string-trim)
+               (replace-regexp-in-string "[[:space:]]+" "-")
+               (replace-regexp-in-string "[^[:alnum:]\\/-]" "")
+               (replace-regexp-in-string "\\/" "-")
+               (replace-regexp-in-string "--*" "-")
+               (replace-regexp-in-string "^-" "")
+               (replace-regexp-in-string "-$" "")))
+
+;;;;; Download HTML document
 
 (defun org-webshot--make-html-tmp-path ()
   "Generates a path to a unique filename in which to store the temporary HTML document."
@@ -94,26 +166,6 @@ The default handler uses the built-in `make-temp-file' to generate a temporary f
     (funcall org-webshot-html-path url title))
    (t
     (org-webshot--html-tmp-path url))))
-
-(defun org-webshot--slugify-title (title)
-  "From TITLE, make a filename slug meant to look nice as URL component.
-
-This is a literal copy-paste from the function
-`org-node-slugify-for-web' of the `org-node' package. Hope that's ok..."
-  (thread-last title
-               (org-link-display-format)
-               (string-glyph-decompose)
-               (seq-remove (lambda (char) (<= #x300 char #x331)))
-               (concat)
-               (string-glyph-compose)
-               (downcase)
-               (string-trim)
-               (replace-regexp-in-string "[[:space:]]+" "-")
-               (replace-regexp-in-string "[^[:alnum:]\\/-]" "")
-               (replace-regexp-in-string "\\/" "-")
-               (replace-regexp-in-string "--*" "-")
-               (replace-regexp-in-string "^-" "")
-               (replace-regexp-in-string "-$" "")))
   
 (defun org-webshot--get-page-title (url &optional slugify)
   "Get title of web page by URL, or `nil' if not found.
@@ -140,18 +192,144 @@ Uses various utilities from `url.el'."
         (org-webshot--slufiy-title web-title-str)
       web-title-str)))
 
-(defun org-webshot-download-website (url)
-  "Download website as a single HTML file and store it in `org-webshot-html-path', which is returned."
-  (interactive "sURL: ")
-  (let* ((title (org-webshot--get-page-title url))
-         (path (org-webshot--html-path url title))
-         (status-code
-          (call-process-shell-command
-           (concat "monolith " url " > " path))))
-    (message "%s %s %s" title path status-code)
+(defun org-webshot--call-monolith (url path)
+  "Call monolith and return process call output."
+  (call-process-shell-command
+   (concat "monolith " url " > " path)))
+
+;;;;; Converter
+
+(defun org-webshot-converters-add (sym name run-fn config-struct)
+  "Add or update a converter in `org-webshot-converters'.
+
+SYM is the converter symbol.
+NAME is a string for display.
+RUN-FN is the converter function.
+Should accept a config instance and a 
+CONFIG-STRUCT is the symbol of the config struct type."
+  (let ((entry (assoc sym org-webshot-converters))
+        (new-plist (list :name name :run run-fn :config config-struct)))
+    (if entry
+        (setcdr entry new-plist)
+      (push (cons sym new-plist) org-webshot-converters))))
+
+(defun org-webshot-converters-remove (sym)
+  "Remove the converter with symbol SYM from `org-webshot-converters'."
+  (setq org-webshot-converters
+        (assq-delete-all sym org-webshot-converters)))
+
+(defun org-webshot--default-media-path (title directory)
+  "Returns path to within same directory as the file."
+  (concat (file-name-as-directory directory) (file-name-as-directory title)))
+
+(defun org-webshot-media-path (title directory)
+  "Returns the path to the directory wherein the media files of the HTML document will be stored."
+  (cond
+   ((stringp org-webshot-media-path)
+    org-webshot-media-path)
+   ((functionp org-webshot-media-path)
+    (funcall org-webshot-media-path title directory))))
+
+;;;;;; Pandoc
+
+(defun org-webshot--pandoc-convert-to-org (in-path in-format out-path out-media &optional pandoc-args)
+  "Convert a file to an Org file, and extracts all media within to a directory.
+
+OUT-MEDIA must be either relative to out-path, or an absolute path."
+  (let* ((out-directory (file-name-directory out-path))
+         ;; Pandoc expects media path to be relative to file path
+         (out-media (if (f-relative-p out-media)
+                        out-media
+                      (file-relative-name out-media out-directory)))
+         (out-filename (file-name-nondirectory out-path))
+         (pandoc-args-str (or pandoc-args "")))
+
+    (message "out-path: %s\nout-dir: %s\n out-media: %s" out-path out-directory out-media)
+
+    (call-process-shell-command
+     (format
+      "cd %s && pandoc --from %s --to org %s --wrap=preserve --extract-media=\"%s\" %s -o %s"
+      out-directory in-format pandoc-args-str out-media in-path out-filename))))
+
+(defun org-webshot-pandoc-convert (config html-path out-dir title)
+  "Use Pandoc to convert a HTML file into an Org file."
+  (let* ((pandoc-args (org-webshot-pandoc-config-pandoc-args config))
+         (org-path (concat (file-name-as-directory out-dir) title ".org"))
+         (media-path (org-webshot-media-path title out-dir))
+         (status (org-webshot--pandoc-convert-to-org html-path "html" org-path media-path pandoc-args)))
+    (unless (= 0 status)
+      (user-error "Convertion failed"))))
+
+(cl-defstruct org-webshot-pandoc-config
+  "Configuration for Pandoc converter."
+  (pandoc-args
+   ""
+   :type string
+   :documentation "Additional args passed to pandoc"))
+
+(org-webshot-converters-add
+ 'pandoc
+ "Pandoc"
+ #'org-webshot-pandoc-convert
+ 'org-webshot-pandoc-config)
+
+;;;;;; Defuddle
+
+(defun org-webshot--make-intermediate-tmp-path ()
+  "Generates a path to a unique filename in which to store the intermediate document."
+  (concat
+   (file-name-as-directory temporary-file-directory)
+   (make-temp-name org-webshot--tmp-intermediate-file-prefix)
+   (if org-webshot-defuddle-to-markdown ".md" ".html")))
+
+(defun org-webshot--defuddle-call (html-path out-format out-path)
+  "Call defuddle and return process call output."
+  (call-process-shell-command
+   (format "node scripts/defuddle.mjs %s %s > %s" html-path out-format out-path)))
+
+(defun org-webshot--defuddle-html-file (path)
+  "Run the defuddle script to convert an HTML file into a simplified version, return path to it.
+
+The simplified file will be a Markdown or HTML file depending on
+`org-webshot-defuddle-to-markdown'."
+  (let* ((out-format (if org-webshot-defuddle-to-markdown "md" "html"))
+         (out-path (org-webshot--make-intermediate-tmp-path))
+         (status-code (org-webshot--defuddle-call path out-format out-path)))
     (if (= 0 status-code)
-        path
-      (user-error "Error calling monolith." status-code))))
+        out-path
+      (user-error "Error calling defuddle: %s" status-code))))
+
+(defun org-webshot-defuddle-convert (config html-path out-dir title)
+  "Use Defuddle to convert a HTML file into an Org file."
+  (let* ((pandoc-args (org-webshot-defuddle-config-pandoc-args config))
+         (org-path (concat (file-name-as-directory out-dir) title ".org"))
+         (media-path (org-webshot-media-path title out-dir))
+         ;; Will error if failed, so we can assume returns path.
+         (defuddled-path (org-webshot--defuddle-html-file html-path))
+         (status-code (org-webshot--pandoc-convert-to-org
+                       defuddled-path
+                       (if org-webshot-defuddle-to-markdown "markdown" "html")
+                       org-path media-path pandoc-args)))
+    (unless (= 0 status-code)
+      (user-error "Pandoc convertion failed: %s" status-code))))
+
+(cl-defstruct (org-webshot-defuddle-config
+               (:include org-webshot-pandoc-config (pandoc-args "--markdown-headings=atx")))
+  "Configuration for Defuddle converter.")
+
+(org-webshot-converters-add
+ 'defuddle
+ "Defuddle"
+ #'org-webshot-defuddle-convert
+ 'org-webshot-defuddle-config)
+
+
+;;;; Transient
+(transient-define-prefix org-webshot--transient ()
+  "HTML to Org Converter Interface")
+
+
+;;;; Footer
 
 (provide 'org-webshot)
 
