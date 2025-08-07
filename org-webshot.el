@@ -205,7 +205,7 @@ Uses various utilities from `url.el'."
 SYM is the converter symbol.
 NAME is a string for display.
 RUN-FN is the converter function.
-Should accept a config instance and a 
+  Should have signature (config html-path out-dir title &optional media-dir)
 CONFIG-STRUCT is the symbol of the config struct type."
   (let ((entry (assoc sym org-webshot-converters))
         (new-plist (list :name name :run run-fn :config config-struct)))
@@ -243,19 +243,16 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
                       (file-relative-name out-media out-directory)))
          (out-filename (file-name-nondirectory out-path))
          (pandoc-args-str (or pandoc-args "")))
-
-    (message "out-path: %s\nout-dir: %s\n out-media: %s" out-path out-directory out-media)
-
     (call-process-shell-command
      (format
       "cd %s && pandoc --from %s --to org %s --wrap=preserve --extract-media=\"%s\" %s -o %s"
       out-directory in-format pandoc-args-str out-media in-path out-filename))))
 
-(defun org-webshot-pandoc-convert (config html-path out-dir title)
+(defun org-webshot-pandoc-convert (config html-path out-dir title &optional media-dir)
   "Use Pandoc to convert a HTML file into an Org file."
   (let* ((pandoc-args (org-webshot-pandoc-config-pandoc-args config))
          (org-path (concat (file-name-as-directory out-dir) title ".org"))
-         (media-path (org-webshot-media-path title out-dir))
+         (media-path (or media-dir (org-webshot-media-path title out-dir)))
          (status (org-webshot--pandoc-convert-to-org html-path "html" org-path media-path pandoc-args)))
     (unless (= 0 status)
       (user-error "Convertion failed"))))
@@ -287,35 +284,37 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
   (call-process-shell-command
    (format "node scripts/defuddle.mjs %s %s > %s" html-path out-format out-path)))
 
-(defun org-webshot--defuddle-html-file (path)
-  "Run the defuddle script to convert an HTML file into a simplified version, return path to it.
-
-The simplified file will be a Markdown or HTML file depending on
-`org-webshot-defuddle-to-markdown'."
-  (let* ((out-format (if org-webshot-defuddle-to-markdown "md" "html"))
+(defun org-webshot--defuddle-html-file (path markdown)
+  "Run the defuddle script to convert an HTML file into a simplified version, return path to it."
+  (let* ((out-format (if markdown "md" "html"))
          (out-path (org-webshot--make-intermediate-tmp-path))
          (status-code (org-webshot--defuddle-call path out-format out-path)))
     (if (= 0 status-code)
         out-path
       (user-error "Error calling defuddle: %s" status-code))))
 
-(defun org-webshot-defuddle-convert (config html-path out-dir title)
+(defun org-webshot-defuddle-convert (config html-path out-dir title &optional media-dir)
   "Use Defuddle to convert a HTML file into an Org file."
   (let* ((pandoc-args (org-webshot-defuddle-config-pandoc-args config))
+         (to-markdown (org-webshot-defuddle-config-to-markdown config))
          (org-path (concat (file-name-as-directory out-dir) title ".org"))
-         (media-path (org-webshot-media-path title out-dir))
+         (media-path (or media-dir (org-webshot-media-path title out-dir)))
          ;; Will error if failed, so we can assume returns path.
-         (defuddled-path (org-webshot--defuddle-html-file html-path))
+         (defuddled-path (org-webshot--defuddle-html-file html-path to-markdown))
          (status-code (org-webshot--pandoc-convert-to-org
                        defuddled-path
-                       (if org-webshot-defuddle-to-markdown "markdown" "html")
+                       (if to-markdown "markdown" "html")
                        org-path media-path pandoc-args)))
     (unless (= 0 status-code)
       (user-error "Pandoc convertion failed: %s" status-code))))
 
 (cl-defstruct (org-webshot-defuddle-config
                (:include org-webshot-pandoc-config (pandoc-args "--markdown-headings=atx")))
-  "Configuration for Defuddle converter.")
+  "Configuration for Defuddle converter."
+  (to-markdown
+   org-webshot-defuddle-to-markdown
+   :type boolean
+   :documentation "Convert intermediate file to Markdown rather than HTML."))
 
 (org-webshot-converters-add
  'defuddle
