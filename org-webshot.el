@@ -16,9 +16,8 @@
 ;;; Code:
 
 ;;;; Requirements
-(require 'transient)
-(require 'ediff)
 (require 'cl-lib)
+(require 'org-webshot-ui)
 
 ;;;; Customization
 (defgroup org-webshot nil
@@ -100,6 +99,8 @@ See `org-webshot-converters-add' and `org-webshot-converters-remove'."
 (defun org-webshot ()
   "Open the HTML to Org converter transient interface."
   (interactive)
+  ;; Probably better not to reset everytime.
+  ;; (org-webshot-ui-reset)
   (org-webshot--transient))
 
 (defun org-webshot-download-website (url)
@@ -145,7 +146,7 @@ This is a literal copy-paste from the function
    (make-temp-name org-webshot--tmp-html-file-prefix)
    ".html"))
 
-(defun org-webshot--html-tmp-path (url)
+(defun org-webshot--html-tmp-path ()
   "Returns path of the temporary file in which to store the HTML document.
 
 The default handler uses the built-in `make-temp-file' to generate a temporary file path."
@@ -153,7 +154,7 @@ The default handler uses the built-in `make-temp-file' to generate a temporary f
    ((stringp org-webshot-html-tmp-path)
     org-webshot-html-tmp-path)
    ((functionp org-webshot-html-tmp-path)
-    (funcall org-webshot-html-tmp-path url))
+    (funcall org-webshot-html-tmp-path))
    (t
     (org-webshot--make-html-tmp-path))))
 
@@ -165,7 +166,7 @@ The default handler uses the built-in `make-temp-file' to generate a temporary f
    ((functionp org-webshot-html-path)
     (funcall org-webshot-html-path url title))
    (t
-    (org-webshot--html-tmp-path url))))
+    (org-webshot--html-tmp-path))))
   
 (defun org-webshot--get-page-title (url &optional slugify)
   "Get title of web page by URL, or `nil' if not found.
@@ -323,9 +324,6 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
  'org-webshot-defuddle-config)
 
 
-;;;; Transient
-(transient-define-prefix org-webshot--transient ()
-  "HTML to Org Converter Interface")
 
 
 ;;;; Footer
