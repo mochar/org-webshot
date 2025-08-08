@@ -60,7 +60,7 @@ and (potentially nil) title of the document, and returns the path."
   :type 'boolean
   :group 'org-webshot)
 
-(defcustom org-webshot-media-path 'org-webshot--default-media-path
+(defcustom org-webshot-media-path 'org-webshot--media-path-local-shared-title
   "Where to store the media files contained within the HTML document.
 
 Can be a string specifying the path to the directory, or a function that
@@ -200,7 +200,39 @@ Uses various utilities from `url.el'."
 
 ;;;;; Converter
 
-(defun org-webshot-converters-add (sym name run-fn config-struct)
+(cl-defmacro org-webshot-define-converter
+    (short-sym display-name
+               slots
+               (config html-path out-dir title &optional media-dir)
+               &rest body)
+  (let* ((the-sym (cadr short-sym))
+         (fn-name (intern (format "org-webshot-convert--%s" the-sym)))
+         (struct-name (intern (format "org-webshot-convert--%s-config" the-sym)))
+         (struct-doc (format "Configuration for %s." display-name)))
+    `(progn
+       ;; 2. Generate the cl-defstruct form
+       (cl-defstruct ,struct-name
+         ,struct-doc
+         ,@slots) ; Splice the user-provided slot definitions here
+
+       ;; Generate the converter function (as before)
+       (defun ,fn-name (,config ,html-path ,out-dir ,title &optional ,media-dir)
+         (unless (file-exists-p ,html-path)
+           (user-error "HTML file does not exist: %s" ,html-path))
+         (unless (stringp ,title)
+           (user-error "Title must be a string: %S" ,title))
+         (make-directory ,out-dir t)
+         (let ((media-dir (or ,media-dir (org-webshot-media-path ,title ,out-dir))))
+           ,@body))
+
+       ;; 3. Register the converter using the generated struct name
+       (org-webshot--converters-add
+        ,short-sym
+        ,display-name
+        #',fn-name
+        ',struct-name))))
+
+(defun org-webshot--converters-add (sym name run-fn config-struct)
   "Add or update a converter in `org-webshot-converters'.
 
 SYM is the converter symbol.
@@ -219,7 +251,7 @@ CONFIG-STRUCT is the symbol of the config struct type."
   (setq org-webshot-converters
         (assq-delete-all sym org-webshot-converters)))
 
-(defun org-webshot--default-media-path (title directory)
+(defun org-webshot--media-path-local-shared-title (title directory)
   "Returns path to within same directory as the file."
   (concat (file-name-as-directory directory) (file-name-as-directory title)))
 
@@ -243,33 +275,24 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
                         out-media
                       (file-relative-name out-media out-directory)))
          (out-filename (file-name-nondirectory out-path))
-         (pandoc-args-str (or pandoc-args "")))
-    (call-process-shell-command
-     (format
-      "cd %s && pandoc --from %s --to org %s --wrap=preserve --extract-media=\"%s\" %s -o %s"
-      out-directory in-format pandoc-args-str out-media in-path out-filename))))
+         (pandoc-args-str (or pandoc-args ""))
+         (cmd (format
+               "cd %s && pandoc --from %s --to org %s --wrap=preserve --extract-media=\"%s\" %s -o %s"
+               out-directory in-format pandoc-args-str out-media in-path out-filename)))
+    (message "Pandoc: %s" cmd)
+    (call-process-shell-command cmd)))
 
-(defun org-webshot-pandoc-convert (config html-path out-dir title &optional media-dir)
-  "Use Pandoc to convert a HTML file into an Org file."
-  (let* ((pandoc-args (org-webshot-pandoc-config-pandoc-args config))
-         (org-path (concat (file-name-as-directory out-dir) title ".org"))
-         (media-path (or media-dir (org-webshot-media-path title out-dir)))
-         (status (org-webshot--pandoc-convert-to-org html-path "html" org-path media-path pandoc-args)))
-    (unless (= 0 status)
-      (user-error "Convertion failed"))))
-
-(cl-defstruct org-webshot-pandoc-config
-  "Configuration for Pandoc converter."
-  (pandoc-args
-   ""
-   :type string
-   :documentation "Additional args passed to pandoc"))
-
-(org-webshot-converters-add
+(org-webshot-define-converter
  'pandoc
- "Pandoc"
- #'org-webshot-pandoc-convert
- 'org-webshot-pandoc-config)
+ "Pandoc" 
+ ((pandoc-args "" :type string :documentation "Additional args for pandoc"))
+ (config html-path out-dir title media-dir)
+ (let* ((pandoc-args (org-webshot-convert--pandoc-config-pandoc-args config))
+        (org-path (concat (file-name-as-directory out-dir) title ".org"))
+        (status (org-webshot--pandoc-convert-to-org html-path "html" org-path media-dir pandoc-args)))
+   (unless (= 0 status)
+     (user-error "Convertion failed: %s" status))))
+ 
 
 ;;;;;; Defuddle
 
@@ -294,36 +317,29 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
         out-path
       (user-error "Error calling defuddle: %s" status-code))))
 
-(defun org-webshot-defuddle-convert (config html-path out-dir title &optional media-dir)
-  "Use Defuddle to convert a HTML file into an Org file."
-  (let* ((pandoc-args (org-webshot-defuddle-config-pandoc-args config))
-         (to-markdown (org-webshot-defuddle-config-to-markdown config))
+(org-webshot-define-converter
+ 'defuddle
+ "Defuddle" 
+ ((pandoc-args
+   "--markdown-headings=atx"
+   :type string
+   :documentation "Additional args for pandoc")
+  (to-markdown
+   org-webshot-defuddle-to-markdown
+   :type boolean
+   :documentation "Convert intermediate file to Markdown rather than HTML."))
+ (config html-path out-dir title media-dir)
+ (let* ((pandoc-args (org-webshot-convert--defuddle-config-pandoc-args config))
+         (to-markdown (org-webshot-convert--defuddle-config-to-markdown config))
          (org-path (concat (file-name-as-directory out-dir) title ".org"))
-         (media-path (or media-dir (org-webshot-media-path title out-dir)))
          ;; Will error if failed, so we can assume returns path.
          (defuddled-path (org-webshot--defuddle-html-file html-path to-markdown))
          (status-code (org-webshot--pandoc-convert-to-org
                        defuddled-path
                        (if to-markdown "markdown" "html")
-                       org-path media-path pandoc-args)))
+                       org-path media-dir pandoc-args)))
     (unless (= 0 status-code)
       (user-error "Pandoc convertion failed: %s" status-code))))
-
-(cl-defstruct (org-webshot-defuddle-config
-               (:include org-webshot-pandoc-config (pandoc-args "--markdown-headings=atx")))
-  "Configuration for Defuddle converter."
-  (to-markdown
-   org-webshot-defuddle-to-markdown
-   :type boolean
-   :documentation "Convert intermediate file to Markdown rather than HTML."))
-
-(org-webshot-converters-add
- 'defuddle
- "Defuddle"
- #'org-webshot-defuddle-convert
- 'org-webshot-defuddle-config)
-
-
 
 
 ;;;; Footer
