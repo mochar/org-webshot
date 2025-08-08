@@ -39,7 +39,7 @@ Alist of (instance-name . org-file-path).")
 
 (defun org-webshot-ui--get-temp-output-dir ()
   "Get or create temporary output directory for conversions."
-  (unless (and org-webshot-ui--temp-output-dir 
+  (unless (and org-webshot-ui--temp-output-dir
                (file-directory-p org-webshot-ui--temp-output-dir))
     (setq org-webshot-ui--temp-output-dir 
           (make-temp-file "org-webshot-output-" t)))
@@ -77,15 +77,14 @@ Alist of (instance-name . org-file-path).")
                      (equal (plist-get instance :config) config)))
               org-webshot-ui--converter-instances))
 
-(defun org-webshot-ui--add-or-update-instance (type config)
-  "Add or update converter instance."
-  (let* ((name (org-webshot-ui--converter-instance-name type config))
-         (existing (org-webshot-ui--find-instance type config)))
-    (if existing
-        existing ; Return existing if found
-      (let ((instance (list :type type :name name :config config)))
-        (push instance org-webshot-ui--converter-instances)
-        instance))))
+(defun org-webshot-ui--commit-instance ()
+  "Commit in-progress converter instance."
+  (let* ((instance org-webshot-ui--converter-instance)
+         (existing (org-webshot-ui--find-instance
+                    (plist-get instance :type)
+                    (plist-get instance :config))))
+    (push instance org-webshot-ui--converter-instances))
+  (setq org-webshot-ui--converter-instance nil))
 
 ;;;; UI Commands
 
@@ -153,57 +152,29 @@ Alist of (instance-name . org-file-path).")
         type
       (user-error "No config struct found for converter %s" type))))
 
-(defun org-webshot-ui-run-converter (instance-name)
-  "Run a specific converter instance."
-  (interactive 
-   (list (completing-read "Converter instance: " 
-                          (mapcar (lambda (i) (plist-get i :name)) 
-                                  org-webshot-ui--converter-instances))))
-  (org-webshot-ui--run-converters (list instance-name)))
-
-(defun org-webshot-ui-run-all-converters ()
-  "Run all converter instances."
+(defun org-webshot-ui-run-converter ()
+  "Run the current converter instance."
   (interactive)
-  (let ((instance-names (mapcar (lambda (i) (plist-get i :name)) 
-                               org-webshot-ui--converter-instances)))
-    (org-webshot-ui--run-converters instance-names)))
-
-(defun org-webshot-ui--run-converters (instance-names)
-  "Run specified converter instances."
-  (unless org-webshot-ui--html-path
-    (user-error "No HTML file available"))
-  (unless (file-exists-p org-webshot-ui--html-path)
-    (user-error "HTML file does not exist: %s" org-webshot-ui--html-path))
-  (unless org-webshot-ui--title
-    (org-webshot-ui--update-title-if-needed))
+  (unless (and
+           org-webshot-ui--html-path
+           org-webshot-ui--converter-instance
+           org-webshot-ui--title
+           (not (string-empty-p org-webshot-ui--title)))
+    (user-error "Not all settings filled in."))
   
-  (let ((temp-dir (org-webshot-ui--get-temp-output-dir))
-        (results '()))
-    
-    (dolist (name instance-names)
-      (let* ((instance (cl-find-if (lambda (i) (string= (plist-get i :name) name))
-                                   org-webshot-ui--converter-instances))
-             (type (plist-get instance :type))
-             (config (plist-get instance :config))
-             (converter-info (assoc type org-webshot-converters))
-             (run-fn (plist-get (cdr converter-info) :run)))
-        
-        (message "Running converter: %s" name)
-        (condition-case err
-            (progn
-              (funcall run-fn config org-webshot-ui--html-path temp-dir org-webshot-ui--title)
-              (let ((org-file (concat (file-name-as-directory temp-dir) 
-                                     org-webshot-ui--title ".org")))
-                (when (file-exists-p org-file)
-                  ;; Rename to include converter name
-                  (let ((renamed-file (concat (file-name-as-directory temp-dir) 
-                                            org-webshot-ui--title "-" name ".org")))
-                    (rename-file org-file renamed-file)
-                    (push (cons name renamed-file) results)))))
-          (error (message "Error running %s: %s" name (error-message-string err))))))
-    
-    (setq org-webshot-ui--results results)
-    (message "Conversion complete. %d files generated." (length results))))
+  (let* ((instance org-webshot-ui--converter-instance)
+         (name (plist-get instance :name))
+         (config (plist-get instance :config))
+         (converter (cdr (assoc (plist-get instance :type) org-webshot-converters)))
+         (run-fn (plist-get converter :run))
+         (out-dir
+          (file-name-concat (org-webshot-ui--get-temp-output-dir) name))
+         (media-dir (org-webshot--media-path-local-shared-title
+                     org-webshot-ui--title  out-dir)))
+    ;; Errors on fail
+    (funcall run-fn config org-webshot-ui--html-path out-dir
+             org-webshot-ui--title media-dir)
+    (org-webshot-ui--commit-instance)))
 
 (defun org-webshot-ui-view-result ()
   "View a conversion result."
@@ -366,8 +337,13 @@ choose a random unused letter from a–z."
 
 Assumes each slot has a default value which is used to infer the type."
   :refresh-suffixes t
-  ["Converter setup"
-   :setup-children
+  [:description
+   (lambda ()
+     (format "Converter setup: %s"
+             (plist-get org-webshot-ui--converter-instance :type)))
+   ("RET" "Convert"
+    (lambda () (interactive) (org-webshot-ui-run-converter)))]
+   [:setup-children
    (lambda (_)
      (let* ((converter-type (org-webshot-ui-select-converter-type))
             (config-struct
@@ -377,20 +353,31 @@ Assumes each slot has a default value which is used to infer the type."
             ;; cdr because the first element is cl-tag-slot
             (config-slots (cdr (cl-struct-slot-info config-struct)))
             (keys (org-webshot--unique-letters-for-strings
-                   (mapcar (lambda (s) (symbol-name (car s))) config-slots))))
+                   (mapcar (lambda (s) (symbol-name (car s))) config-slots)))
+            config-sufixes)
+       
        (setq org-webshot-ui--converter-instance
              (list :type converter-type :name name :config config))
-       (cl-mapcar
-        (lambda (slot key)
-          (transient-parse-suffix
-           'org-webshot--transient-converter
-           (list key (symbol-name (car slot))
+       
+       (setq config-sufixes
+             (cl-mapcar
+              (lambda (slot key)
+                ;; The arguments of the transient sufix
+                (list
+                 key 
+                 (symbol-name (car slot))
                  (lambda ()
                    (interactive)
                    (org-webshot-ui--set-converter-value
                     (car slot)
-                    (cadr slot))))))
-        config-slots keys)))])
+                    (cadr slot)))
+                 :transient t))
+              config-slots keys))
+        
+       (transient-parse-suffixes
+        'org-webshot--transient-converter
+        (vconcat (vector "Parameters") config-sufixes))
+       ))])
 
 ;;;;; Main
 (transient-define-prefix org-webshot--transient ()
@@ -406,15 +393,13 @@ Assumes each slot has a default value which is used to infer the type."
    ("o" org-webshot-ui--output-dir-suffix)]
   ["Converters"
    ("c" "Create converter" org-webshot--transient-converter :transient t)
+   (">" "Open tmp dir"
+    (lambda () (interactive) (dired (org-webshot-ui--get-temp-output-dir)))
+    :transient t)
    ("C" "Clear instances" org-webshot-ui-clear-instances
     :if (lambda () org-webshot-ui--converter-instances)
     :transient t)
    ("l" org-webshot-ui--list-instances-suffix :transient t)]
-  ["Run"
-   ("r" "Run converter" org-webshot-ui-run-converter
-    :if (lambda () org-webshot-ui--converter-instances))
-   ("R" "Run all converters" org-webshot-ui-run-all-converters
-    :if (lambda () org-webshot-ui--converter-instances))]
   ["Results" 
    :if (lambda () org-webshot-ui--results)
    ("v" "View result" org-webshot-ui-view-result)
