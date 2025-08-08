@@ -318,18 +318,18 @@ choose a random unused letter from a–z."
               (error "Ran out of letters"))))
         (push chosen result)))))
 
-;; TODO No need for default-value, can be read from converter instance.
-(defun org-webshot-ui--set-converter-value (slot-symbol default-value)
+;; TODO No need for value-type, can be read from converter instance.
+(defun org-webshot-ui--set-converter-value (slot-symbol value-type)
   ""
   (let ((slot-value (symbol-name slot-symbol))
         (config (plist-get org-webshot-ui--converter-instance :config)))
     (setf
      (cl-struct-slot-value (aref config 0) slot-symbol config)
-     (cond ((stringp default-value)
+     (cond ((equal value-type 'string)
             (read-string (format "%s: " slot-value)))
-           ((numberp default-value)
+           ((equal value-type 'number)
             (read-number (format "%s: " slot-value)))
-           ((booleanp default-value)
+           ((equal value-type 'boolean)
             (yes-or-no-p (format "%s: " slot-value)))))))
 
 (transient-define-prefix org-webshot--transient-converter ()
@@ -363,6 +363,7 @@ Assumes each slot has a default value which is used to infer the type."
              (cl-mapcar
               (lambda (slot key)
                 ;; The arguments of the transient sufix
+                (message "SLOT: %s KEY: %s" slot key)
                 (list
                  key 
                  (symbol-name (car slot))
@@ -370,7 +371,7 @@ Assumes each slot has a default value which is used to infer the type."
                    (interactive)
                    (org-webshot-ui--set-converter-value
                     (car slot)
-                    (cadr slot)))
+                    (plist-get slot :type)))
                  :transient t))
               config-slots keys))
         
