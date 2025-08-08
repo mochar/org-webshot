@@ -1,3 +1,4 @@
+;;; org-webshot-ui.el --- HTML to Org conversion utilities -*- lexical-binding: t; -*-
 
 ;;;; Requirements
 (require 'cl-lib)
@@ -19,6 +20,9 @@
 
 (defvar org-webshot-ui--output-directory nil
   "Current output directory for the transient interface.")
+
+(defvar org-webshot-ui--converter-instance nil
+  "Converter instance that is being constructed in the UI.")
 
 (defvar org-webshot-ui--converter-instances '()
   "List of converter instances created in the UI.
@@ -138,41 +142,16 @@ Alist of (instance-name . org-file-path).")
     (user-error "HTML file does not exist: %s" org-webshot-ui--html-path))
   (eww-open-file org-webshot-ui--html-path))
 
-(defun org-webshot-ui-create-converter ()
-  "Create a new converter instance."
+(defun org-webshot-ui-select-converter-type ()
+  "Prompt user to select converter type."
   (interactive)
   (let* ((converter-types (mapcar #'car org-webshot-converters))
          (type (intern (completing-read "Converter type: " 
                                         (mapcar #'symbol-name converter-types))))
          (config-struct (plist-get (cdr (assoc type org-webshot-converters)) :config)))
     (if config-struct
-        (org-webshot-ui--create-converter-config type config-struct)
+        type
       (user-error "No config struct found for converter %s" type))))
-
-(defun org-webshot-ui--create-converter-config (type config-struct)
-  "Create config for converter TYPE with CONFIG-STRUCT."
-  (let* ((config (funcall (intern (format "make-%s" config-struct))))
-         (slots (cl-struct-slot-info config-struct)))
-    
-    ;; Interactively set each slot
-    (dolist (slot slots)
-      (unless (equal (car (nth 0 (cl-struct-slot-info 'org-webshot-defuddle-config))) 'cl-tag-slot)
-        (let* ((slot-name (car slot))
-               (slot-type (plist-get (cdr slot) :type))
-               (current-value (cl-struct-slot-value config-struct slot-name config))
-               (prompt (format "%s (%s) [%s]: " slot-name slot-type current-value))
-               (input (read-string prompt nil nil (format "%s" current-value))))
-          (when (not (string-empty-p input))
-            (let ((parsed-value (cond
-                                 ((eq slot-type 'boolean) 
-                                  (not (member input '("nil" "false" "f" ""))))
-                                 ((eq slot-type 'string) input)
-                                 (t (read input)))))
-              (setf (cl-struct-slot-value config-struct slot-name config) parsed-value))))))
-    
-    ;; Add or update the instance
-    (let ((instance (org-webshot-ui--add-or-update-instance type config)))
-      (message "Created converter instance: %s" (plist-get instance :name)))))
 
 (defun org-webshot-ui-run-converter (instance-name)
   "Run a specific converter instance."
@@ -289,7 +268,7 @@ Alist of (instance-name . org-file-path).")
             (org-webshot--html-tmp-path))
           org-webshot-ui--url nil
           org-webshot-ui--title nil
-          org-webshot-ui--output-directory nil
+          org-webshot-ui--output-directory org-webshot-default-output-directory
           org-webshot-ui--converter-instances '()
           org-webshot-ui--results nil
           org-webshot-ui--temp-output-dir nil)))
@@ -341,6 +320,78 @@ Alist of (instance-name . org-file-path).")
   (interactive)
   (org-webshot-ui-download-html))
 
+;;;;; Converter
+
+(defun org-webshot--unique-letters-for-strings (strings)
+  "Return a list of unique letters, one for each string in STRINGS.
+Prefer the first unused character from each string; if exhausted,
+choose a random unused letter from a–z."
+  (let ((taken (make-hash-table :test #'equal))
+        result)
+    (dolist (s strings (nreverse result))
+      (let ((chosen nil))
+        ;; Try each letter in the string until we find an unused one
+        (cl-loop for ch across s
+                 for letter = (downcase (char-to-string ch))
+                 unless (gethash letter taken)
+                 do (setq chosen letter)
+                    (puthash letter t taken)
+                    (cl-return))
+        ;; If all letters are taken, pick a random unused one
+        (unless chosen
+          (let* ((alphabet (mapcar #'char-to-string (number-sequence ?a ?z)))
+                 (unused (cl-remove-if (lambda (l) (gethash l taken))
+                                       alphabet)))
+            (if unused
+                (setq chosen (nth (random (length unused)) unused))
+              (error "Ran out of letters"))))
+        (push chosen result)))))
+
+;; TODO No need for default-value, can be read from converter instance.
+(defun org-webshot-ui--set-converter-value (slot-symbol default-value)
+  ""
+  (let ((slot-value (symbol-name slot-symbol))
+        (config (plist-get org-webshot-ui--converter-instance :config)))
+    (setf
+     (cl-struct-slot-value (aref config 0) slot-symbol config)
+     (cond ((stringp default-value)
+            (read-string (format "%s: " slot-value)))
+           ((numberp default-value)
+            (read-number (format "%s: " slot-value)))
+           ((booleanp default-value)
+            (yes-or-no-p (format "%s: " slot-value)))))))
+
+(transient-define-prefix org-webshot--transient-converter ()
+  "Set up converter parameters and run.
+
+Assumes each slot has a default value which is used to infer the type."
+  :refresh-suffixes t
+  ["Converter setup"
+   :setup-children
+   (lambda (_)
+     (let* ((converter-type (org-webshot-ui-select-converter-type))
+            (config-struct
+             (plist-get (cdr (assoc converter-type org-webshot-converters)) :config))
+            (config (funcall (intern (format "make-%s" config-struct))))
+            (name (org-webshot-ui--converter-instance-name converter-type config))
+            ;; cdr because the first element is cl-tag-slot
+            (config-slots (cdr (cl-struct-slot-info config-struct)))
+            (keys (org-webshot--unique-letters-for-strings
+                   (mapcar (lambda (s) (symbol-name (car s))) config-slots))))
+       (setq org-webshot-ui--converter-instance
+             (list :type converter-type :name name :config config))
+       (cl-mapcar
+        (lambda (slot key)
+          (transient-parse-suffix
+           'org-webshot--transient-converter
+           (list key (symbol-name (car slot))
+                 (lambda ()
+                   (interactive)
+                   (org-webshot-ui--set-converter-value
+                    (car slot)
+                    (cadr slot))))))
+        config-slots keys)))])
+
 ;;;;; Main
 (transient-define-prefix org-webshot--transient ()
   "HTML to Org Converter Interface"
@@ -354,10 +405,11 @@ Alist of (instance-name . org-file-path).")
    ("t" org-webshot-ui--title-suffix)
    ("o" org-webshot-ui--output-dir-suffix)]
   ["Converters"
-   ("c" "Create converter" org-webshot-ui-create-converter)
+   ("c" "Create converter" org-webshot--transient-converter :transient t)
    ("C" "Clear instances" org-webshot-ui-clear-instances
-    :if (lambda () org-webshot-ui--converter-instances))
-   ("l" org-webshot-ui--list-instances-suffix)]
+    :if (lambda () org-webshot-ui--converter-instances)
+    :transient t)
+   ("l" org-webshot-ui--list-instances-suffix :transient t)]
   ["Run"
    ("r" "Run converter" org-webshot-ui-run-converter
     :if (lambda () org-webshot-ui--converter-instances))
@@ -405,7 +457,6 @@ Alist of (instance-name . org-file-path).")
   :description (lambda () 
                  (format "Output dir: %s" 
                          (or org-webshot-ui--output-directory 
-                             org-webshot-default-output-directory
                              "Not set")))
   :key "o"
   (interactive)
