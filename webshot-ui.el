@@ -48,8 +48,8 @@ Each instance is a plist with :type, :name, :config keys.")
   "Get the path of the org file in the temp dir."
   (file-name-concat
    (webshot-ui--get-temp-output-dir)
-   webshot-ui--tmp-output-title
-   (format "%s.org" webshot-ui--title)))
+   (plist-get instance :name)
+   (format "%s.org" webshot-ui--tmp-output-title)))
 
 (defun webshot-ui--infer-title ()
   "Infer title from HTML file or URL."
@@ -179,7 +179,7 @@ Each instance is a plist with :type, :name, :config keys.")
          (out-dir
           (if final-p
               webshot-ui--output-directory
-            (file-name-concat (webshot-ui--get-temp-output-dir) name)))
+            (file-name-directory (webshot-ui--converter-temp-output-path instance))))
          (media-dir
           (if final-p
               nil ;; infer from settings
@@ -239,6 +239,9 @@ Each instance is a plist with :type, :name, :config keys.")
   (interactive)
   (when (yes-or-no-p "Clear all converter instances? ")
     (setq webshot-ui--converter-instances '())
+    (delete-directory webshot-ui--temp-output-dir t)
+    (setq webshot-ui--temp-output-dir nil)
+    (webshot-ui--get-temp-output-dir)
     (message "Converter instances cleared")))
 
 (defun webshot-ui-reset ()
