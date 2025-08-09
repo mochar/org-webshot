@@ -251,7 +251,7 @@ Alist of (instance-name . org-file-path).")
   ""
   (cond
    ((equal type 'string)
-    (format "%s" (propertize value 'face (if value 'transient-value 'transient-inactive-value))))
+    (format "%s" (propertize (format "%s" value) 'face (if value 'transient-value 'transient-inactive-value))))
    ((equal type 'number)
     (format "%s"
             (propertize
@@ -274,8 +274,9 @@ Alist of (instance-name . org-file-path).")
    (webshot-ui--download-suffix)])
 
 (transient-define-suffix webshot-ui--url-suffix ()
-  :description (lambda () 
-                 (format "URL: %s" (or webshot-ui--url "Not set")))
+  :description
+  (lambda () 
+    (format "URL: %s" (webshot-ui--propertize-value 'string webshot-ui--url)))
   :key "u"
   :transient t
   (interactive)
@@ -285,14 +286,15 @@ Alist of (instance-name . org-file-path).")
 (transient-define-suffix webshot-ui--html-out-suffix ()
   :description
   (lambda ()
-    (format "Output path: %s" (or webshot-ui--html-out-path "Not set")))
+    (format "Output path: %s"
+            (webshot-ui--propertize-value 'string webshot-ui--html-out-path)))
   :key "o"
   :transient t
   (interactive)
-  (webshot-ui-set-html-out-file))
+  (call-interactively #'webshot-ui-set-html-out-file))
 
 (transient-define-suffix webshot-ui--html-tmp-suffix ()
-  :description ""
+  :description "Temporary file"
   :format "    %k %d"
   :key "-tmp"
   :transient t
@@ -302,7 +304,7 @@ Alist of (instance-name . org-file-path).")
 (transient-define-suffix webshot-ui--download-suffix ()
   :description "Download"
   :key "d"
-  :inapt-if-not (lambda () webshot-ui--url)
+  :inapt-if-not (lambda () (and webshot-ui--url webshot-ui--html-out-path))
   (interactive)
   (webshot-ui-download-html))
 
@@ -456,7 +458,8 @@ Assumes each slot has a default value which is used to infer the type."
 
 (transient-define-suffix webshot-ui--title-suffix ()
   :description (lambda () 
-                 (format "Title: %s" (or webshot-ui--title "Not set")))
+                 (format "Title: %s"
+                         (webshot-ui--propertize-value 'string webshot-ui--title)))
   :key "t"
   :transient t
   (interactive)
@@ -465,8 +468,7 @@ Assumes each slot has a default value which is used to infer the type."
 (transient-define-suffix webshot-ui--output-dir-suffix ()
   :description (lambda () 
                  (format "Output dir: %s" 
-                         (or webshot-ui--output-directory 
-                             "Not set")))
+                         (webshot-ui--propertize-value 'string webshot-ui--output-directory)))
   :key "o"
   (interactive)
   (call-interactively #'webshot-ui-set-output-directory))

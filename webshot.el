@@ -190,7 +190,7 @@ Uses various utilities from `url.el'."
         (setq web-title-str (decode-coding-string web-title-str (intern coding-charset))))
       (kill-buffer))
     (if slugify
-        (webshot--slufiy-title web-title-str)
+        (webshot--slugify-title web-title-str)
       web-title-str)))
 
 (defun webshot--call-monolith (url path)
