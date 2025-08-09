@@ -92,6 +92,36 @@ Each instance is a plist with :type, :name, :config keys.")
     (push instance webshot-ui--converter-instances))
   (setq webshot-ui--converter-instance nil))
 
+(defun webshot-ui--format-converter-fields (instance)
+  "Format each slot and its value as a one line string."
+  (let ((config (plist-get instance :config)))
+    (mapconcat (lambda (slot)
+                 (format "%s: \"%s\""
+                         (car slot)
+                         (cl-struct-slot-value (type-of config) (car slot) config)))
+               (cdr (cl-struct-slot-info (type-of config)))
+               ", ")))
+
+(defun webshot-ui--completing-read-converter-instance (prompt &optional excludes)
+  "Query user to select one of converter instances."
+  (let* ((instances (cl-remove-if
+                     (lambda (x) (member x excludes))
+                     webshot-ui--converter-instances))
+         (choices (mapcar
+                   (lambda (instance)
+                     (cons
+                      (format "%s: %s"
+                              (propertize (plist-get instance :name) 'face '(:weight bold))
+                              (propertize
+                               (webshot-ui--format-converter-fields instance)
+                               'face '(:slant italic)))
+                      instance))
+                   instances))
+         (choice (completing-read prompt choices nil t))
+         (instance (cdr (assoc choice choices))))
+    (message "%s" choices)
+    instance))
+
 ;;;; UI Commands
 
 (defun webshot-ui-set-url (url)
@@ -194,11 +224,9 @@ Each instance is a plist with :type, :name, :config keys.")
   (interactive)
   (unless webshot-ui--converter-instances
     (user-error "No conversion results available"))
-  (let* ((choices (mapcar
-                   (lambda (x) (cons (plist-get x :name) x))
-                   webshot-ui--converter-instances))
-         (choice (completing-read "View result: " choices))
-         (instance (cdr (assoc choice choices)))
+  (let* ((instance
+          (webshot-ui--completing-read-converter-instance
+           "View result: "))
          (file-path (webshot-ui--converter-temp-output-path instance)))
     (find-file file-path)))
 
@@ -210,15 +238,11 @@ Each instance is a plist with :type, :name, :config keys.")
   (when (< (length webshot-ui--converter-instances) 2)
     (user-error "Need at least 2 results to compare"))
   
-  (let* ((choices (mapcar
-                   (lambda (x) (cons (plist-get x :name) x))
-                   webshot-ui--converter-instances))
-         (choice1 (assoc (completing-read "First result: " choices) choices))
-         (remaining-choices (remove choice1 choices))
-         (choice2 (assoc (completing-read "Second result: " remaining-choices) choices))
-         (file1-path (webshot-ui--converter-temp-output-path (cdr choice1)))
+  (let* ((choice1 (webshot-ui--completing-read-converter-instance "First: "))
+         (choice2 (webshot-ui--completing-read-converter-instance "Second: " (list choice1)))
+         (file1-path (webshot-ui--converter-temp-output-path choice1))
          (buf1 (find-file-noselect file1-path))
-         (file2-path (webshot-ui--converter-temp-output-path (cdr choice2)))
+         (file2-path (webshot-ui--converter-temp-output-path choice2))
          (buf2 (find-file-noselect file2-path)))
 
     ;; Make sure the headers arent collapsed
@@ -287,10 +311,18 @@ Each instance is a plist with :type, :name, :config keys.")
 ;;;; Transient Interface
 
 (defun webshot-ui--propertize-value (type value)
-  ""
+  "Add text property to value based on its type and contents"
   (cond
    ((equal type 'string)
-    (format "%s" (propertize (format "%s" value) 'face (if value 'transient-value 'transient-inactive-value))))
+    (format "%s"
+            (propertize
+             (format "%s" (if (string-empty-p value) "<empty>" value))
+             'face
+             (if value
+                 (if (string-empty-p value)
+                     (list 'transient-value '(:slant italic transient-value))
+                   'transient-value)
+               'transient-inactive-value))))
    ((equal type 'number)
     (format "%s"
             (propertize
