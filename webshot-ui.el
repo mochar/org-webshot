@@ -141,16 +141,17 @@ Alist of (instance-name . org-file-path).")
     (user-error "HTML file does not exist: %s" webshot-ui--html-path))
   (eww-open-file webshot-ui--html-path))
 
-(defun webshot-ui-select-converter-type ()
-  "Prompt user to select converter type."
+(defun webshot-ui-select-converter ()
+  "Prompt user to select converter for building."
   (interactive)
   (let* ((converter-types (mapcar #'car webshot-converters))
          (type (intern (completing-read "Converter type: " 
                                         (mapcar #'symbol-name converter-types))))
-         (config-struct (plist-get (cdr (assoc type webshot-converters)) :config)))
-    (if config-struct
-        type
-      (user-error "No config struct found for converter %s" type))))
+         (config-struct (plist-get (cdr (assoc type webshot-converters)) :config))
+         (config (funcall (intern (format "make-%s" config-struct))))
+         (name (webshot-ui--converter-instance-name type config)))
+    (setq webshot-ui--converter-instance
+          (list :type type :name name :config config))))
 
 (defun webshot-ui-run-converter ()
   "Run the current converter instance."
@@ -246,6 +247,20 @@ Alist of (instance-name . org-file-path).")
 
 ;;;; Transient Interface
 
+(defun webshot-ui--propertize-value (type value)
+  ""
+  (cond
+   ((equal type 'string)
+    (format "%s" (propertize value 'face (if value 'transient-value 'transient-inactive-value))))
+   ((equal type 'number)
+    (format "%s"
+            (propertize
+             (format "%s" value)
+             'face
+             (if value 'transient-value 'transient-inactive-value))))
+   ((equal type 'boolean)
+    (propertize (format "%s" value) 'face 'transient-value))))
+
 ;;;;; Download webpage
 
 (transient-define-prefix webshot--transient-download ()
@@ -332,49 +347,54 @@ choose a random unused letter from a–z."
            ((equal value-type 'boolean)
             (yes-or-no-p (format "%s: " slot-value)))))))
 
+(defun webshot-ui--get-config-value (config field)
+  "Get the current value for KEY from the converter instance."
+  (cl-struct-slot-value (type-of config) field config))
+
 (transient-define-prefix webshot--transient-converter ()
   "Set up converter parameters and run.
 
 Assumes each slot has a default value which is used to infer the type."
-  :refresh-suffixes t
+  :refresh-suffixes t 
   [:description
    (lambda ()
      (format "Converter setup: %s"
              (plist-get webshot-ui--converter-instance :type)))
-   ("RET" "Convert"
-    (lambda () (interactive) (webshot-ui-run-converter)))]
-   [:setup-children
+   ("RET" "Convert" webshot-ui-run-converter)]
+  [:setup-children
    (lambda (_)
-     (let* ((converter-type (webshot-ui-select-converter-type))
+     (let* ((converter-type (plist-get webshot-ui--converter-instance :type))
             (config-struct
              (plist-get (cdr (assoc converter-type webshot-converters)) :config))
-            (config (funcall (intern (format "make-%s" config-struct))))
-            (name (webshot-ui--converter-instance-name converter-type config))
             ;; cdr because the first element is cl-tag-slot
             (config-slots (cdr (cl-struct-slot-info config-struct)))
             (keys (webshot--unique-letters-for-strings
                    (mapcar (lambda (s) (symbol-name (car s))) config-slots)))
             config-sufixes)
-       
-       (setq webshot-ui--converter-instance
-             (list :type converter-type :name name :config config))
-       
+              
        (setq config-sufixes
              (cl-mapcar
               (lambda (slot key)
-                ;; The arguments of the transient sufix
-                (message "SLOT: %s KEY: %s" slot key)
-                (list
-                 key 
-                 (symbol-name (car slot))
-                 (lambda ()
-                   (interactive)
-                   (webshot-ui--set-converter-value
-                    (car slot)
-                    (plist-get slot :type)))
-                 :transient t))
+                (let ((value (nth 1 slot))
+                      (type (plist-get slot :type)))
+                  (list
+                   key 
+                   (format "%s: %s"
+                           (symbol-name (car slot))
+                           (webshot-ui--propertize-value
+                            type
+                            (webshot-ui--get-config-value
+                             (plist-get webshot-ui--converter-instance :config)
+                             (car slot))))
+                   (lambda ()
+                     (interactive)
+                     (webshot-ui--set-converter-value
+                      (car slot)
+                      type)
+                     (message "%s" webshot-ui--converter-instance))
+                   :transient t)))
               config-slots keys))
-        
+
        (transient-parse-suffixes
         'webshot--transient-converter
         (vconcat (vector "Parameters") config-sufixes))
@@ -393,7 +413,12 @@ Assumes each slot has a default value which is used to infer the type."
    ("t" webshot-ui--title-suffix)
    ("o" webshot-ui--output-dir-suffix)]
   ["Converters"
-   ("c" "Create converter" webshot--transient-converter :transient t)
+   ("c" "Create converter"
+    (lambda ()
+      (interactive)
+      (webshot-ui-select-converter)
+      (webshot--transient-converter))
+    :transient t)
    (">" "Open tmp dir"
     (lambda () (interactive) (dired (webshot-ui--get-temp-output-dir)))
     :transient t)
@@ -413,12 +438,10 @@ Assumes each slot has a default value which is used to infer the type."
 
 ;; Dynamic suffixes for showing current state
 (transient-define-suffix webshot-ui--file-suffix ()
-  :description (lambda () 
-                 (format "HTML file: %s" 
-                         (if webshot-ui--html-path
-                             ;; (file-name-nondirectory webshot-ui--html-path)
-                             webshot-ui--html-path
-                           "Not set")))
+  :description (lambda ()
+                 (format
+                  "HTML file: %s"
+                  (webshot-ui--propertize-value 'string webshot-ui--html-path)))
   :key "f"
   :transient t
   (interactive)

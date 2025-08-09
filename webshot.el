@@ -325,7 +325,7 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
    :type string
    :documentation "Additional args for pandoc")
   (to-markdown
-   webshot-defuddle-to-markdown
+   t
    :type boolean
    :documentation "Convert intermediate file to Markdown rather than HTML."))
  (config html-path out-dir title media-dir)
