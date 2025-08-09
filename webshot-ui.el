@@ -28,12 +28,11 @@
   "List of converter instances created in the UI.
 Each instance is a plist with :type, :name, :config keys.")
 
-(defvar webshot-ui--results nil
-  "Results from the last conversion run.
-Alist of (instance-name . org-file-path).")
-
 (defvar webshot-ui--temp-output-dir nil
   "Temporary directory for converter outputs.")
+
+(defvar webshot-ui--tmp-output-title "webshot"
+  "Use a static title for the temporary output files as title can be changed inbetween converters.")
 
 ;;;; Functions
 
@@ -44,6 +43,13 @@ Alist of (instance-name . org-file-path).")
     (setq webshot-ui--temp-output-dir 
           (make-temp-file "webshot-output-" t)))
   webshot-ui--temp-output-dir)
+
+(defun webshot-ui--converter-temp-output-path (instance)
+  "Get the path of the org file in the temp dir."
+  (file-name-concat
+   (webshot-ui--get-temp-output-dir)
+   webshot-ui--tmp-output-title
+   (format "%s.org" webshot-ui--title)))
 
 (defun webshot-ui--infer-title ()
   "Infer title from HTML file or URL."
@@ -153,13 +159,14 @@ Alist of (instance-name . org-file-path).")
     (setq webshot-ui--converter-instance
           (list :type type :name name :config config))))
 
-(defun webshot-ui-run-converter ()
+(defun webshot-ui-run-converter (final-p)
   "Run the current converter instance."
   (interactive)
   (unless (and
            webshot-ui--html-path
            webshot-ui--converter-instance
            webshot-ui--title
+           (or (not final-p) webshot-ui--output-directory)
            (not (string-empty-p webshot-ui--title)))
     (user-error "Not all settings filled in."))
   
@@ -168,54 +175,60 @@ Alist of (instance-name . org-file-path).")
          (config (plist-get instance :config))
          (converter (cdr (assoc (plist-get instance :type) webshot-converters)))
          (run-fn (plist-get converter :run))
+         (title (if final-p webshot-ui--title webshot-ui--tmp-output-title))
          (out-dir
-          (file-name-concat (webshot-ui--get-temp-output-dir) name))
-         (media-dir (webshot--media-path-local-shared-title
-                     webshot-ui--title  out-dir)))
+          (if final-p
+              webshot-ui--output-directory
+            (file-name-concat (webshot-ui--get-temp-output-dir) name)))
+         (media-dir
+          (if final-p
+              nil ;; infer from settings
+            (webshot--media-path-local-shared-title
+             title out-dir))))
     ;; Errors on fail
-    (funcall run-fn config webshot-ui--html-path out-dir
-             webshot-ui--title media-dir)
+    (funcall run-fn config webshot-ui--html-path out-dir title media-dir)
     (webshot-ui--commit-instance)))
 
 (defun webshot-ui-view-result ()
   "View a conversion result."
   (interactive)
-  (unless webshot-ui--results
+  (unless webshot-ui--converter-instances
     (user-error "No conversion results available"))
-  (let* ((choices (mapcar #'car webshot-ui--results))
+  (let* ((choices (mapcar (lambda (x) (cons (plist-get x :name) x)) items))
          (choice (completing-read "View result: " choices))
-         (file-path (cdr (assoc choice webshot-ui--results))))
+         (instance (cdr (assoc selected-name choices)))
+         (file-path (cdr (assoc choice webshot-ui--converter-instances))))
     (find-file file-path)))
 
 (defun webshot-ui-ediff-results ()
   "Compare conversion results using ediff."
   (interactive)
-  (unless webshot-ui--results
+  (unless webshot-ui--converter-instances
     (user-error "No conversion results available"))
-  (when (< (length webshot-ui--results) 2)
+  (when (< (length webshot-ui--converter-instances) 2)
     (user-error "Need at least 2 results to compare"))
   
-  (let* ((choices (mapcar #'car webshot-ui--results))
+  (let* ((choices (mapcar #'car webshot-ui--converter-instances))
          (file1-name (completing-read "First file: " choices))
          (remaining-choices (remove file1-name choices))
          (file2-name (completing-read "Second file: " remaining-choices))
-         (file1-path (cdr (assoc file1-name webshot-ui--results)))
-         (file2-path (cdr (assoc file2-name webshot-ui--results))))
+         (file1-path (cdr (assoc file1-name webshot-ui--converter-instances)))
+         (file2-path (cdr (assoc file2-name webshot-ui--converter-instances))))
     (ediff-files file1-path file2-path)))
 
 (defun webshot-ui-save-result ()
   "Save a conversion result to the output directory."
   (interactive)
-  (unless webshot-ui--results
+  (unless webshot-ui--converter-instances
     (user-error "No conversion results available"))
   (unless webshot-ui--output-directory
     (setq webshot-ui--output-directory 
           (or webshot-default-output-directory
               (read-directory-name "Output directory: "))))
   
-  (let* ((choices (mapcar #'car webshot-ui--results))
+  (let* ((choices (mapcar #'car webshot-ui--converter-instances))
          (choice (completing-read "Save result: " choices))
-         (temp-path (cdr (assoc choice webshot-ui--results)))
+         (temp-path (cdr (assoc choice webshot-ui--converter-instances)))
          (output-path (concat (file-name-as-directory webshot-ui--output-directory)
                              (file-name-nondirectory temp-path))))
     (copy-file temp-path output-path t)
@@ -242,7 +255,7 @@ Alist of (instance-name . org-file-path).")
           webshot-ui--title nil
           webshot-ui--output-directory webshot-default-output-directory
           webshot-ui--converter-instances '()
-          webshot-ui--results nil
+          webshot-ui--converter-instances nil
           webshot-ui--temp-output-dir nil)))
 
 ;;;; Transient Interface
@@ -362,7 +375,7 @@ Assumes each slot has a default value which is used to infer the type."
    (lambda ()
      (format "Converter setup: %s"
              (plist-get webshot-ui--converter-instance :type)))
-   ("RET" "Convert" webshot-ui-run-converter)]
+   ("RET" "Convert" (lambda () (interactive) (webshot-ui-run-converter nil)))]
   [:setup-children
    (lambda (_)
      (let* ((converter-type (plist-get webshot-ui--converter-instance :type))
@@ -429,10 +442,10 @@ Assumes each slot has a default value which is used to infer the type."
     :transient t)
    ("l" webshot-ui--list-instances-suffix :transient t)]
   ["Results" 
-   :if (lambda () webshot-ui--results)
+   :if (lambda () webshot-ui--converter-instances)
    ("v" "View result" webshot-ui-view-result)
    ("e" "Ediff results" webshot-ui-ediff-results
-    :if (lambda () (>= (length webshot-ui--results) 2)))
+    :if (lambda () (>= (length webshot-ui--converter-instances) 2)))
    ("s" "Save result" webshot-ui-save-result)]
   ["Misc"
    ("q" "Quit" transient-quit-one)
