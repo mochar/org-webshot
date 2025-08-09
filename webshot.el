@@ -279,7 +279,7 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
          (cmd (format
                "cd %s && pandoc --from %s --to org %s --wrap=preserve --extract-media=\"%s\" %s -o %s"
                out-directory in-format pandoc-args-str out-media in-path out-filename)))
-    (message "Pandoc: %s" cmd)
+    ;; (message "Pandoc: %s" cmd)
     (call-process-shell-command cmd)))
 
 (webshot-define-converter

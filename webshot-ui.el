@@ -194,10 +194,12 @@ Each instance is a plist with :type, :name, :config keys.")
   (interactive)
   (unless webshot-ui--converter-instances
     (user-error "No conversion results available"))
-  (let* ((choices (mapcar (lambda (x) (cons (plist-get x :name) x)) items))
+  (let* ((choices (mapcar
+                   (lambda (x) (cons (plist-get x :name) x))
+                   webshot-ui--converter-instances))
          (choice (completing-read "View result: " choices))
-         (instance (cdr (assoc selected-name choices)))
-         (file-path (cdr (assoc choice webshot-ui--converter-instances))))
+         (instance (cdr (assoc choice choices)))
+         (file-path (webshot-ui--converter-temp-output-path instance)))
     (find-file file-path)))
 
 (defun webshot-ui-ediff-results ()
@@ -208,13 +210,35 @@ Each instance is a plist with :type, :name, :config keys.")
   (when (< (length webshot-ui--converter-instances) 2)
     (user-error "Need at least 2 results to compare"))
   
-  (let* ((choices (mapcar #'car webshot-ui--converter-instances))
-         (file1-name (completing-read "First file: " choices))
-         (remaining-choices (remove file1-name choices))
-         (file2-name (completing-read "Second file: " remaining-choices))
-         (file1-path (cdr (assoc file1-name webshot-ui--converter-instances)))
-         (file2-path (cdr (assoc file2-name webshot-ui--converter-instances))))
-    (ediff-files file1-path file2-path)))
+  (let* ((choices (mapcar
+                   (lambda (x) (cons (plist-get x :name) x))
+                   webshot-ui--converter-instances))
+         (choice1 (assoc (completing-read "First result: " choices) choices))
+         (remaining-choices (remove choice1 choices))
+         (choice2 (assoc (completing-read "Second result: " remaining-choices) choices))
+         (file1-path (webshot-ui--converter-temp-output-path (cdr choice1)))
+         (buf1 (find-file-noselect file1-path))
+         (file2-path (webshot-ui--converter-temp-output-path (cdr choice2)))
+         (buf2 (find-file-noselect file2-path)))
+
+    ;; Make sure the headers arent collapsed
+    (with-current-buffer buf1
+      (org-fold-show-all))
+    (with-current-buffer buf2
+      (org-fold-show-all))
+    
+    (ediff-buffers
+     buf1 buf2
+     ;; ediff-buffer-local startup-hooks:
+     ;; Adds a hook that kills the two buffers after quiting ediff
+     (list (lambda ()
+             (add-hook
+              'ediff-quit-hook
+              (lambda ()
+                (when (buffer-live-p buf1) (kill-buffer buf1))
+                (when (buffer-live-p buf2) (kill-buffer buf2)))
+              ;; t here makes it buffer-local
+              nil t))))))
 
 (defun webshot-ui-save-result ()
   "Save a conversion result to the output directory."
@@ -241,8 +265,7 @@ Each instance is a plist with :type, :name, :config keys.")
     (setq webshot-ui--converter-instances '())
     (delete-directory webshot-ui--temp-output-dir t)
     (setq webshot-ui--temp-output-dir nil)
-    (webshot-ui--get-temp-output-dir)
-    (message "Converter instances cleared")))
+    (webshot-ui--get-temp-output-dir)))
 
 (defun webshot-ui-reset ()
   "Reset all UI state."
@@ -408,8 +431,7 @@ Assumes each slot has a default value which is used to infer the type."
                      (interactive)
                      (webshot-ui--set-converter-value
                       (car slot)
-                      type)
-                     (message "%s" webshot-ui--converter-instance))
+                      type))
                    :transient t)))
               config-slots keys))
 
