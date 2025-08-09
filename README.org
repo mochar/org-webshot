@@ -1,0 +1,64 @@
+* Website archiving and conversion to Org mode
+
+This emacs package provides an interface that funcitons as a wrapper around tools (see below) that 1) download a website and all its assets as a single HTML file, and 2) convert that file into an Org mode file.
+The main contribution for me is the ability to quickly generate multiple Org files of the same source with different converters and converter parameters.
+This was something I needed because depending on the web page, a different setting was required to get the desired results.
+
+[[file:assets/webshot.png]]
+
+** Tools
+
+The following tools are used to archive a page as a single HTML file:
+- [[https://github.com/Y2Z/monolith][Monolith]]
+- [[https://github.com/gildas-lormeau/SingleFile-MV3][SingleFile]] TODO
+
+The following tools are used to convert HTML files to Org files:
+- [[https://pandoc.org/][Pandoc]] of course, which is used in conjunction with the following tools for improved results:
+- [[https://github.com/kepano/defuddle][Defuddle]]
+- [[https://github.com/mozilla/readability][Readability]] TODO
+- Eww's `eww-readable` functionality TODO
+
+** Installation
+
+The package is still in early development and therefore only available through github:
+
+#+begin_src emacs-lisp
+(use-package webshot
+    :vc (url "https://github.com/mochar/webshot.el.git")
+    
+    ;; Open the interface
+    :bind (("s-w" . webshot))
+    
+    :config
+    ;; See (customize-group) "webshot" for all options
+    ;; Some useful ones:
+    
+    ;; The path in which to store the HTML file
+    (setq webshot-html-path "/home/me/archive/")
+    
+    ;; The default directory where the converted Org files will be stored.
+    ;; Set at nil to get prompted everytime.
+    (setq webshot-default-output-directory "/home/me/archive/")
+    
+    ;; Where to store the media files contained within the HTML document
+    ;; The default function below stores the media folder under the
+    ;; same directory as the Org file, with the same name.
+    (setq webshot-media-path 'webshot--media-path-local-shared-title)
+    
+    ;; Whether to immediately open the Org file after conversion.
+    (setq webshot-view-after-run t))
+#+end_src
+
+However this won't work yet as the underlying tools need to be installed seperately through [[https://nodejs.org][node]].
+So make sure you have that, then enter the ~scripts/~ directory and execute ~npm install~.
+If you know of a better way to package these tools that don't violate any licenses I would be grateful to hear how.
+
+** Usage
+
+Simply run M-x ~webshot~ and play around with the interface.
+
+Of course you may use the underlying functions without the graphical interfaces for automation purposes.
+
+** Extensibility
+
+The macro ~webshot-define-converter~ is available to define your own converter. See ~webshot.el~.
