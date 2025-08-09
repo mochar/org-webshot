@@ -84,6 +84,11 @@ Can be a string specifying the path to the directory, or a function that
   :type 'boolean
   :group 'webshot)
 
+(defcustom webshot-ui-reset-after-done t
+  "Reset transient UI parameters after a succesful run."
+  :type 'boolean
+  :group 'webshot)
+
 (defcustom webshot-converters '()
   "Alist mapping converter type symbols to metadata plists.
 

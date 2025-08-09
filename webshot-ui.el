@@ -231,8 +231,7 @@ Each instance is a plist with :type, :name, :config keys.")
     (funcall run-fn config webshot-ui--html-path out-dir title media-dir)
     (message "Conversion finished: %s" file-name)
     (if immediate-p
-        nil
-        ;; (webshot-ui-reset)
+        (when webshot-ui-reset-after-done (webshot-ui-reset))
       (webshot-ui--commit-instance))
     (when view-p (find-file file-name))
     file-name))
