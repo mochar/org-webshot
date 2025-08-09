@@ -78,6 +78,12 @@ Can be a string specifying the path to the directory, or a function that
           (const nil))
   :group 'webshot)
 
+;; TODO now only handled in UI
+(defcustom webshot-view-after-run nil
+  "Immediately open the generated Org file after finish."
+  :type 'boolean
+  :group 'webshot)
+
 (defcustom webshot-converters '()
   "Alist mapping converter type symbols to metadata plists.
 
@@ -99,8 +105,6 @@ See `webshot-converters-add' and `webshot-converters-remove'."
 (defun webshot ()
   "Open the HTML to Org converter transient interface."
   (interactive)
-  ;; Probably better not to reset everytime.
-  ;; (webshot-ui-reset)
   (webshot--transient))
 
 (defun webshot-download-website (url)
@@ -210,12 +214,10 @@ Uses various utilities from `url.el'."
          (struct-name (intern (format "webshot-convert--%s-config" the-sym)))
          (struct-doc (format "Configuration for %s." display-name)))
     `(progn
-       ;; 2. Generate the cl-defstruct form
        (cl-defstruct ,struct-name
          ,struct-doc
-         ,@slots) ; Splice the user-provided slot definitions here
+         ,@slots)
 
-       ;; Generate the converter function (as before)
        (defun ,fn-name (,config ,html-path ,out-dir ,title &optional ,media-dir)
          (unless (file-exists-p ,html-path)
            (user-error "HTML file does not exist: %s" ,html-path))
@@ -225,7 +227,6 @@ Uses various utilities from `url.el'."
          (let ((media-dir (or ,media-dir (webshot-media-path ,title ,out-dir))))
            ,@body))
 
-       ;; 3. Register the converter using the generated struct name
        (webshot--converters-add
         ,short-sym
         ,display-name
