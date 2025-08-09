@@ -108,24 +108,28 @@ Each instance is a plist with :type, :name, :config keys.")
                (cdr (cl-struct-slot-info (type-of config)))
                ", ")))
 
-(defun webshot-ui--completing-read-converter-instance (prompt &optional excludes)
+(defun webshot-ui--completing-read-converter-instance (prompt &optional excludes return-if-one)
   "Query user to select one of converter instances."
-  (let* ((instances (cl-remove-if
-                     (lambda (x) (member x excludes))
-                     webshot-ui--converter-instances))
-         (choices (mapcar
-                   (lambda (instance)
-                     (cons
-                      (format "%s: %s"
-                              (propertize (plist-get instance :name) 'face '(:weight bold))
-                              (propertize
-                               (webshot-ui--format-converter-fields instance)
-                               'face '(:slant italic)))
-                      instance))
-                   instances))
-         (choice (completing-read prompt choices nil t))
-         (instance (cdr (assoc choice choices))))
-    instance))
+  (let ((instances (cl-remove-if
+                    (lambda (x) (member x excludes))
+                    webshot-ui--converter-instances)))
+    (if (= (length instances) 0)
+        (user-error "No instances to select"))
+    (if (and (= (length instances) 1) return-if-one)
+        (car instances)
+      (let* ((choices (mapcar
+                       (lambda (instance)
+                         (cons
+                          (format "%s: %s"
+                                  (propertize (plist-get instance :name) 'face '(:weight bold))
+                                  (propertize
+                                   (webshot-ui--format-converter-fields instance)
+                                   'face '(:slant italic)))
+                          instance))
+                       instances))
+             (choice (completing-read prompt choices nil t))
+             (instance (cdr (assoc choice choices))))
+        instance))))
 
 ;;;; UI Commands
 
@@ -226,8 +230,12 @@ Each instance is a plist with :type, :name, :config keys.")
     ;; Errors on fail
     (funcall run-fn config webshot-ui--html-path out-dir title media-dir)
     (message "Conversion finished: %s" file-name)
-    (unless immediate-p (webshot-ui--commit-instance))
-    (when view-p (find-file file-name))))
+    (if immediate-p
+        nil
+        ;; (webshot-ui-reset)
+      (webshot-ui--commit-instance))
+    (when view-p (find-file file-name))
+    file-name))
 
 (defun webshot-ui-view-result ()
   "View a conversion result."
@@ -478,10 +486,10 @@ Assumes each slot has a default value which is used to infer the type."
     :if (lambda () webshot-ui--html-path))]
   ["Configuration"
    (webshot-ui--title-suffix)
-   (webshot-ui--output-dir-suffix)]
+   (webshot-ui--output-dir-suffix)
+   ("-v" "--view" "View after run")]
   ["Run converter"
    :if (lambda () webshot-ui--html-path)
-   ("-v" "--view" "View after run")
    (webshot-ui--run-suffix)]
   [:description
    (lambda ()
@@ -508,20 +516,17 @@ Assumes each slot has a default value which is used to infer the type."
    ("e" "Ediff" webshot-ui-ediff-results
     :if (lambda () webshot-ui--converter-instances)
     :inapt-if-not (lambda () (>= (length webshot-ui--converter-instances) 2)))
-   ("s" "Save" webshot-ui-save-result
-    :if (lambda () webshot-ui--converter-instances))]
+   (webshot-ui--save-suffix)]
   ["Misc"
    ("R" "Reset" webshot-ui-reset :transient t)
    ("q" "Quit" transient-quit-one)])
 
-;; Dynamic suffixes for showing current state
 (transient-define-suffix webshot-ui--run-suffix (args)
   :description "Run immediate"
   :key "r"
-  :inapt-if-not
-  (lambda ()
-    (and webshot-ui--output-directory 
-         webshot-ui--title))
+  :inapt-if-not (lambda ()
+                  (and webshot-ui--output-directory 
+                       webshot-ui--title))
   (interactive (list (transient-args 'webshot--transient)))
 
   (let ((view (transient-arg-value "View after run" args)))
@@ -529,6 +534,27 @@ Assumes each slot has a default value which is used to infer the type."
     (setq webshot-ui--convert-immediate t)
     (setq webshot-ui--view-after-run view)
     (webshot--transient-converter)))
+
+(transient-define-suffix webshot-ui--save-suffix (args)
+  "Save a conversion result to the output directory.
+
+Currently this reruns the converter but respecting the user specified
+settings, such as where to store the directory, the media files, and how
+to name the Org file. The reason is that simply copying the files over
+can lead to invalid Org links if the media folder has a different
+relative path to the Org file."
+  :description "Save"
+  :key "s"
+  :if (lambda () webshot-ui--converter-instances)
+  :inapt-if-not (lambda ()
+                  (and webshot-ui--output-directory 
+                       webshot-ui--title))
+  (interactive (list (transient-args 'webshot--transient)))
+
+  (let ((view (transient-arg-value "View after run" args))
+        (instance (webshot-ui--completing-read-converter-instance "Converter: ")))
+    (setq webshot-ui--converter-instance instance)
+    (webshot-ui-run-converter t view)))
 
 (transient-define-suffix webshot-ui--file-suffix ()
   :description (lambda ()
