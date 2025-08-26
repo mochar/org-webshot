@@ -104,6 +104,10 @@ See `webshot-converters-add' and `webshot-converters-remove'."
 (defvar webshot--tmp-intermediate-file-prefix "webshot-int_"
   "Prefix of the intermediate file between the original HTML file and the final Org file.")
 
+(defconst webshot--dir
+  (file-name-directory (or load-file-name buffer-file-name))
+  "Root directory of `webshot'.")
+
 ;;;; Commands
 
 ;;;###autoload
@@ -204,6 +208,7 @@ Uses various utilities from `url.el'."
 
 (defun webshot--call-monolith (url path)
   "Call monolith and return process call output."
+  (message "Monolith: %s > %s" url path)
   (call-process-shell-command
    (concat "monolith " url " > " path)))
 
@@ -311,8 +316,11 @@ OUT-MEDIA must be either relative to out-path, or an absolute path."
 
 (defun webshot--defuddle-call (html-path out-format out-path)
   "Call defuddle and return process call output."
+  (message "Defuddle: node scripts/defuddle.mjs %s %s > %s" html-path out-format out-path)
   (call-process-shell-command
-   (format "node scripts/defuddle.mjs %s %s > %s" html-path out-format out-path)))
+   (format "node %s %s %s > %s"
+           (expand-file-name "scripts/defuddle.mjs" webshot--dir)
+           html-path out-format out-path)))
 
 (defun webshot--defuddle-html-file (path markdown)
   "Run the defuddle script to convert an HTML file into a simplified version, return path to it."
