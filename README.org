@@ -1,7 +1,7 @@
 * Website archiving and conversion to Org mode
 
-This emacs package provides an interface that funcitons as a wrapper around tools (see below) that 1) download a website and all its assets as a single HTML file, and 2) convert that file into an Org mode file.
-The main contribution for me is the ability to quickly generate multiple Org files of the same source with different converters and converter parameters.
+This Emacs package provides an interface that functions as a wrapper around tools (see below) that 1) download a website and all its assets as a single HTML file, and 2) convert that file into an Org mode file.
+The main contribution for me is the ability to quickly generate multiple Org files of the same HTML file using different converters and converter parameters.
 This was something I needed because depending on the web page, a different setting was required to get the desired results.
 
 [[file:assets/webshot.png]]
@@ -20,7 +20,7 @@ The following tools are used to convert HTML files to Org files:
 
 ** Installation
 
-The package is still in early development and therefore only available through github:
+The package is still in early development and therefore only available through GitHub:
 
 #+begin_src emacs-lisp
 (use-package webshot
